@@ -20,15 +20,3 @@ export function formatDate(iso: string | null): string {
   if (Number.isNaN(date.getTime())) return "—";
   return date.toLocaleDateString("ru-RU", { day: "numeric", month: "short", year: "numeric" });
 }
-
-export const PLATFORM_LABEL: Record<string, string> = {
-  youtube: "YouTube",
-  vk: "VK Видео",
-  rutube: "Rutube"
-};
-
-export const PLATFORM_COLOR: Record<string, string> = {
-  youtube: "#FF4757",
-  vk: "#4C87F0",
-  rutube: "#F5A623"
-};

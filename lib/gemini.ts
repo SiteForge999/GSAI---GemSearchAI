@@ -1,4 +1,4 @@
-import { Platform, SearchPlan, VideoResult } from "./types";
+import { SearchPlan, VideoResult } from "./types";
 
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 const GEMINI_ENDPOINT = (model: string) =>
@@ -19,7 +19,6 @@ async function callGemini(body: unknown): Promise<any> {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
-    // У Gemini бывают долгие ответы на сложных запросах
     cache: "no-store"
   });
 
@@ -40,58 +39,35 @@ async function callGemini(body: unknown): Promise<any> {
 
 /**
  * Превращает запрос пользователя на естественном языке в оптимизированные
- * поисковые параметры для каждой из трёх площадок.
+ * поисковые параметры для YouTube Data API.
  */
-export async function buildSearchPlan(
-  query: string,
-  platforms: Platform[]
-): Promise<SearchPlan> {
+export async function buildSearchPlan(query: string): Promise<SearchPlan> {
   const responseSchema = {
     type: "object",
     properties: {
-      intent: { type: "string", description: "Краткое описание того, что именно ищет пользователь и зачем" },
-      youtube: {
-        type: "object",
-        properties: {
-          query: { type: "string" },
-          order: { type: "string", enum: ["relevance", "date", "viewCount"] },
-          recentOnly: { type: "boolean" }
-        },
-        required: ["query"]
+      intent: {
+        type: "string",
+        description: "Краткое описание того, что именно ищет пользователь и зачем"
       },
-      vk: {
-        type: "object",
-        properties: {
-          query: { type: "string" },
-          order: { type: "string", enum: ["relevance", "date", "viewCount"] },
-          recentOnly: { type: "boolean" }
-        },
-        required: ["query"]
+      query: {
+        type: "string",
+        description: "Оптимизированный поисковый запрос для YouTube Data API"
       },
-      rutube: {
-        type: "object",
-        properties: {
-          query: { type: "string" },
-          order: { type: "string", enum: ["relevance", "date", "viewCount"] },
-          recentOnly: { type: "boolean" }
-        },
-        required: ["query"]
-      }
+      order: { type: "string", enum: ["relevance", "date", "viewCount"] },
+      recentOnly: { type: "boolean" }
     },
-    required: ["intent", "youtube", "vk", "rutube"]
+    required: ["intent", "query"]
   };
 
-  const prompt = `Ты — помощник умного видеопоиска. Пользователь ввёл запрос на естественном языке (может быть по-русски или на другом языке).
-Твоя задача — разложить этот запрос в оптимальные поисковые ключевые слова отдельно для трёх площадок: YouTube, VK Видео и Rutube.
+  const prompt = `Ты — помощник умного поиска видео на YouTube. Пользователь ввёл запрос на естественном языке.
+Твоя задача — превратить его в точный поисковый запрос для YouTube Data API.
 
 Правила:
-- Для VK Видео и Rutube (русскоязычная аудитория) формулируй ключевые слова по-русски, даже если исходный запрос на другом языке.
-- Для YouTube можно оставить международную формулировку, если так запрос точнее (например, оригинальные англоязычные термины).
+- Убери из формулировки слова-паразиты ("найди", "покажи", "видео про") и оставь только суть, но сохрани важные детали (имена, термины, названия).
+- Если запрос точнее звучит на языке оригинала (например, англоязычный технический термин) — используй его, иначе формулируй так, как пользователь.
 - Если пользователь явно просит "свежее", "новое", "за последнюю неделю" и т.п. — recentOnly=true и order="date".
 - Если явно просит "популярное", "самое просматриваемое" — order="viewCount".
 - По умолчанию order="relevance".
-- Убери из ключевых слов слова-паразиты запроса ("найди", "покажи", "видео про") и оставь только суть.
-- Список активных площадок, которые интересуют пользователя: ${platforms.join(", ")}. Для остальных всё равно верни разумный план (на случай если он передумает), но не как приоритет.
 
 Запрос пользователя: "${query}"
 
@@ -110,8 +86,8 @@ export async function buildSearchPlan(
 }
 
 /**
- * Второй проход: ранжирует объединённые результаты трёх площадок по смыслу
- * запроса и добавляет короткое объяснение "почему это подходит".
+ * Второй проход: ранжирует найденные видео по смыслу запроса
+ * и добавляет короткое объяснение "почему это подходит".
  */
 export async function rankResults(
   originalQuery: string,
@@ -120,10 +96,8 @@ export async function rankResults(
 ): Promise<VideoResult[]> {
   if (results.length === 0) return results;
 
-  // Отправляем в модель только компактные метаданные, не весь объект
   const compact = results.map((r, i) => ({
     index: i,
-    platform: r.platform,
     title: r.title,
     description: r.description?.slice(0, 220) || "",
     channel: r.channel,
@@ -142,7 +116,10 @@ export async function rankResults(
           properties: {
             index: { type: "integer" },
             relevance: { type: "number", description: "От 0 до 1" },
-            reason: { type: "string", description: "Одна короткая фраза по-русски, почему видео подходит запросу" }
+            reason: {
+              type: "string",
+              description: "Одна короткая фраза по-русски, почему видео подходит запросу"
+            }
           },
           required: ["index", "relevance", "reason"]
         }
@@ -154,7 +131,7 @@ export async function rankResults(
   const prompt = `Исходный запрос пользователя: "${originalQuery}"
 Распознанное намерение: "${intent}"
 
-Ниже список найденных видео с трёх площадок (YouTube, VK, Rutube) в формате JSON.
+Ниже список найденных на YouTube видео в формате JSON.
 Оцени каждое видео по релевантности запросу пользователя (от 0 до 1) и дай короткое объяснение (до 8 слов, по-русски), почему оно подходит или чем полезно.
 Учитывай не только совпадение слов, но и реальный смысл запроса.
 
@@ -188,7 +165,6 @@ ${JSON.stringify(compact)}
     merged.sort((a, b) => (b.relevance ?? 0) - (a.relevance ?? 0));
     return merged;
   } catch {
-    // Если ранжирование не удалось — возвращаем как есть, без объяснений
     return results;
   }
 }

@@ -1,4 +1,4 @@
-import { PlatformPlan, VideoResult } from "./types";
+import { SearchPlan, VideoResult } from "./types";
 
 function parseISODuration(iso: string | undefined): number | null {
   if (!iso) return null;
@@ -10,7 +10,7 @@ function parseISODuration(iso: string | undefined): number | null {
   return hours * 3600 + minutes * 60 + seconds;
 }
 
-export async function searchYouTube(plan: PlatformPlan, limit = 12): Promise<VideoResult[]> {
+export async function searchYouTube(plan: SearchPlan, limit = 16): Promise<VideoResult[]> {
   const apiKey = process.env.YOUTUBE_API_KEY;
   if (!apiKey) {
     throw new Error(
@@ -65,7 +65,6 @@ export async function searchYouTube(plan: PlatformPlan, limit = 12): Promise<Vid
     // Если детали не получили — вернём хотя бы базовые данные из поиска
     return (searchData.items || []).map((item: any) => ({
       id: item.id.videoId,
-      platform: "youtube" as const,
       title: item.snippet?.title || "",
       description: item.snippet?.description || "",
       thumbnail: item.snippet?.thumbnails?.medium?.url || null,
@@ -81,7 +80,6 @@ export async function searchYouTube(plan: PlatformPlan, limit = 12): Promise<Vid
 
   return (detailsData.items || []).map((item: any) => ({
     id: item.id,
-    platform: "youtube" as const,
     title: item.snippet?.title || "",
     description: item.snippet?.description || "",
     thumbnail:
