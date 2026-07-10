@@ -14,9 +14,7 @@ const config: Config = {
         paper: "#EDEFF3",
         mute: "#8B93A3",
         signal: "#5FE0B7",
-        youtube: "#FF4757",
-        vk: "#4C87F0",
-        rutube: "#F5A623"
+        youtube: "#FF4757"
       },
       fontFamily: {
         display: ["var(--font-display)"],
