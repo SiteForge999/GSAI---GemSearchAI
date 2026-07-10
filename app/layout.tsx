@@ -21,9 +21,9 @@ const mono = JetBrains_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Умный видеопоиск · YouTube, VK, Rutube",
+  title: "Умный видеопоиск · YouTube",
   description:
-    "Один запрос — три источника. Умный поиск видео по YouTube, VK Видео и Rutube с ранжированием на базе Gemini."
+    "Умный поиск видео на YouTube с пониманием смысла запроса и ранжированием результатов на базе Gemini."
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
