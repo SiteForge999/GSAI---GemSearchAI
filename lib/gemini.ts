@@ -1,4 +1,5 @@
-import { SearchPlan, VideoResult } from "./types";
+import { SearchPlan, SearchResult } from "./types";
+import { addTokenUsage } from "./tokenUsage";
 
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 const GEMINI_ENDPOINT = (model: string) =>
@@ -14,7 +15,12 @@ function getApiKey(): string {
   return key;
 }
 
-async function callGemini(body: unknown): Promise<any> {
+interface GeminiCallResult {
+  result: any;
+  usage: { promptTokens: number; candidatesTokens: number; totalTokens: number };
+}
+
+async function callGemini(body: unknown): Promise<GeminiCallResult> {
   const res = await fetch(`${GEMINI_ENDPOINT(GEMINI_MODEL)}?key=${getApiKey()}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -29,12 +35,23 @@ async function callGemini(body: unknown): Promise<any> {
 
   const data = await res.json();
   const text: string | undefined = data?.candidates?.[0]?.content?.parts?.[0]?.text;
+
+  const usageMeta = data?.usageMetadata || {};
+  const usage = {
+    promptTokens: usageMeta.promptTokenCount || 0,
+    candidatesTokens: usageMeta.candidatesTokenCount || 0,
+    totalTokens: usageMeta.totalTokenCount || 0
+  };
+  // Учитываем токены даже если сам ответ окажется невалидным JSON — списание
+  // токенов у Gemini уже произошло на их стороне
+  await addTokenUsage(usage.promptTokens, usage.candidatesTokens, usage.totalTokens);
+
   if (!text) {
     throw new Error("Gemini API вернул пустой ответ.");
   }
 
   const cleaned = text.replace(/```json/gi, "").replace(/```/g, "").trim();
-  return JSON.parse(cleaned);
+  return { result: JSON.parse(cleaned), usage };
 }
 
 /**
@@ -73,7 +90,7 @@ export async function buildSearchPlan(query: string): Promise<SearchPlan> {
 
 Ответь строго в формате JSON согласно схеме, без пояснений и без markdown-разметки.`;
 
-  const plan = await callGemini({
+  const { result } = await callGemini({
     contents: [{ role: "user", parts: [{ text: prompt }] }],
     generationConfig: {
       responseMimeType: "application/json",
@@ -82,29 +99,43 @@ export async function buildSearchPlan(query: string): Promise<SearchPlan> {
     }
   });
 
-  return plan as SearchPlan;
+  return result as SearchPlan;
 }
 
 /**
- * Второй проход: ранжирует найденные видео по смыслу запроса
- * и добавляет короткое объяснение "почему это подходит".
+ * Второй проход: ранжирует найденные результаты (видео, shorts, каналы или
+ * плейлисты — любой из них) по смыслу запроса и добавляет короткое
+ * объяснение "почему это подходит".
  */
 export async function rankResults(
   originalQuery: string,
   intent: string,
-  results: VideoResult[]
-): Promise<VideoResult[]> {
+  results: SearchResult[]
+): Promise<SearchResult[]> {
   if (results.length === 0) return results;
 
-  const compact = results.map((r, i) => ({
-    index: i,
-    title: r.title,
-    description: r.description?.slice(0, 220) || "",
-    channel: r.channel,
-    durationSeconds: r.durationSeconds,
-    views: r.views,
-    publishedAt: r.publishedAt
-  }));
+  const compact = results.map((r, i) => {
+    const base: Record<string, unknown> = {
+      index: i,
+      title: r.title,
+      description: r.description?.slice(0, 220) || ""
+    };
+
+    if (r.kind === "video" || r.kind === "short") {
+      base.channel = r.channel;
+      base.durationSeconds = r.durationSeconds;
+      base.views = r.views;
+      base.publishedAt = r.publishedAt;
+    } else if (r.kind === "channel") {
+      base.subscriberCount = r.subscriberCount;
+      base.videoCount = r.videoCount;
+    } else if (r.kind === "playlist") {
+      base.channel = r.channel;
+      base.itemCount = r.itemCount;
+    }
+
+    return base;
+  });
 
   const responseSchema = {
     type: "object",
@@ -118,7 +149,7 @@ export async function rankResults(
             relevance: { type: "number", description: "От 0 до 1" },
             reason: {
               type: "string",
-              description: "Одна короткая фраза по-русски, почему видео подходит запросу"
+              description: "Одна короткая фраза по-русски, почему результат подходит запросу"
             }
           },
           required: ["index", "relevance", "reason"]
@@ -131,17 +162,18 @@ export async function rankResults(
   const prompt = `Исходный запрос пользователя: "${originalQuery}"
 Распознанное намерение: "${intent}"
 
-Ниже список найденных на YouTube видео в формате JSON.
-Оцени каждое видео по релевантности запросу пользователя (от 0 до 1) и дай короткое объяснение (до 8 слов, по-русски), почему оно подходит или чем полезно.
+Ниже список найденных на YouTube результатов (это могут быть видео, Shorts,
+каналы или плейлисты) в формате JSON.
+Оцени каждый результат по релевантности запросу пользователя (от 0 до 1) и дай короткое объяснение (до 8 слов, по-русски), почему он подходит или чем полезен.
 Учитывай не только совпадение слов, но и реальный смысл запроса.
 
-Видео:
+Результаты:
 ${JSON.stringify(compact)}
 
 Ответь строго в формате JSON согласно схеме, без пояснений.`;
 
   try {
-    const parsed = await callGemini({
+    const { result: parsed } = await callGemini({
       contents: [{ role: "user", parts: [{ text: prompt }] }],
       generationConfig: {
         responseMimeType: "application/json",
